@@ -29,7 +29,7 @@
 
 # 帮助
 
-本项目使用selenium借用chromedriver进行无头浏览器的访问。因此需要安装chrome浏览器，并访问https://chromedriver.chromium.org/downloads**下载符合当前chrome版本的chromedriver.exe放置到项目路径下**。若chromedriver.exe版本不符合，可能一运行就会报满屏异常，看起来在运行，其实没有用，还是要换正确的版本。
+安装依赖：pip install playwright && python -m playwright install && pip install -r requirements.txt
 
 
 
@@ -70,7 +70,9 @@ q_input_length=50
 q_output_length=50
 ```
 
-运行时先安装依赖：pip install -r requirements.txt
+输入的url文件在上面的ini文件中设置即可，程序默认从./input文件里找输入文件。
+
+
 
 然后可直接执行： python  whatscan.py 
 
