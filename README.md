@@ -1,6 +1,6 @@
-- 更新，2025.09.23，添加证书信息、页面版权信息的扫描并记录；用playwright替换selenium
+- 更新，2025.09.23，①添加对https证书信息、页面版权信息的扫描解析和记录；②对未渲染js的原始页面、渲染后的html页面都做了资产识别，原先只对渲染后的页面做识别，导致一些资产识别不出有效的产品，这是因为指纹写的是未渲染的html的特征；③用playwright替换selenium，安装playwright需要执行：pip install playwright && python -m playwright install
 
-  安装playwright需要执行：pip install playwright && python -m playwright install
+  
 
 # 简介
 
