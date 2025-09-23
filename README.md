@@ -44,7 +44,7 @@ input_file=input.txt
 #从输入文件的哪一行开始探测
 read_index=1
 
-#探测时是否使用socks5代理
+#探测时是否使用http代理
 use_proxy=1
 #访问谷歌翻译api是否需要使用代理
 translate_using_proxy=1
@@ -59,7 +59,7 @@ google_tran_api_timeout=30
 #页面加载最长时间
 set_page_load_timeout=30
 
-#代理服务器IP
+#http代理服务器IP
 proxy_server=127.0.0.1
 #代理服务器端口
 proxy_port=10809
@@ -71,8 +71,6 @@ q_output_length=50
 ```
 
 输入的url文件在上面的ini文件中设置即可，程序默认从./input文件里找输入文件。
-
-
 
 然后可直接执行： python  whatscan.py 
 
