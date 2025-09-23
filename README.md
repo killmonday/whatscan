@@ -1,3 +1,7 @@
+- 更新，2025.09.23，添加证书信息、页面版权信息的扫描并记录；用playwright替换selenium
+
+  安装playwright需要执行：pip install playwright && python -m playwright install
+
 # 简介
 
 在信息收集的过程往往遇到以下问题：

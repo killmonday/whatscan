@@ -1,10 +1,12 @@
 # coding = utf-8
 # #!/usr/bin/python3
-# pip install selenium python-docx translate docxcompose scikit-learn beautifulsoup4
-
+# pip install python-docx translate docxcompose scikit-learn pysocks
+# pip install playwright && python -m playwright install
+# 
 import csv
 import os
 import re
+import ssl
 import time
 import html
 import docx     
@@ -13,6 +15,9 @@ import ctypes
 import socket
 import requests
 import traceback
+import socket
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
 import common.tf_idf as tf_idf
 from queue import Queue
 from threading import Thread
@@ -20,9 +25,8 @@ from urllib.parse import urlparse
 from urllib.parse import quote
 from threading import active_count
 from configparser import ConfigParser
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+# 用playwright 替换了 selenium
+from playwright.sync_api import sync_playwright
 from translate import Translator   
 requests.packages.urllib3.disable_warnings()
 
@@ -47,7 +51,10 @@ try:
 except Exception as e:
     print("parse config.ini error: ", e)
     exit(1)
-    
+
+
+
+
 # 加载DLL
 kscan_lib = ctypes.CDLL('./kscan.dll')
 # 定义参数类型
@@ -125,6 +132,7 @@ def kscan_verify(Protocol, Port, Header, Body, Response, Title=b'', Hash=b'', Ic
 
 
 
+
 def producer(q_in):
     total_line_count = iter_count(input_file)
     current_index = 0
@@ -156,210 +164,248 @@ def producer(q_in):
                 except Exception as e:
                     e_info = f"exception, {e.__traceback__.tb_frame.f_globals['__file__']}, line: {e.__traceback__.tb_lineno}\n{str(e)}\n"
                     print(e_info)
-
-
+def get_cert(url):
+    try:
+        parsed_url = urlparse(url)
+        hostname = parsed_url.hostname
+        port = parsed_url.port or 443
+        
+        # 方法1: 直接使用socket和ssl
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        
+        with socket.create_connection((hostname, port), timeout=14) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+                cert = ssock.getpeercert(binary_form=True)
+                pem_cert = ssl.DER_cert_to_PEM_cert(cert)
+                # 将 PEM 格式的证书加载为 x509 对象
+                cert = x509.load_pem_x509_certificate(pem_cert.encode('utf-8', errors='ignore'), default_backend())
+                if cert:
+                    # 打印证书的详细信息
+                    print("#"*40)
+                    print("Issuer:", cert.issuer.rfc4514_string()) 
+                    print("Subject:", cert.subject.rfc4514_string())
+                    print("Validity:")
+                    print("  Not Before:", cert.not_valid_before.strftime(format='%Y-%m-%d %H:%M:%S'))
+                    print("  Not After:", cert.not_valid_after.strftime(format='%Y-%m-%d %H:%M:%S'))
+                    print("Serial Number:", str(cert.serial_number))
+                    print("Signature Algorithm:", cert.signature_algorithm_oid._name)
+                    print("#"*40)
+                    cert_info = f'''Issuer:\t{cert.issuer.rfc4514_string()}
+Subject:\t{cert.subject.rfc4514_string()}
+Validity:\t{cert.not_valid_before.strftime(format='%Y-%m-%d %H:%M:%S')}  ~  {cert.not_valid_after.strftime(format='%Y-%m-%d %H:%M:%S')}'''
+                    return cert_info
+                else:
+                    return ''
+                    
+    except Exception as e:
+        return ''
+    
 
 
 def exploit(q_in, q_out):
-    chrome_driver_path = r'chromedriver.exe'
-    chrome_options = Options()
-    chrome_options.add_argument('--silent')
-    chrome_options.add_argument('log-level=3')
-    chrome_options.add_experimental_option("excludeSwitches",['enable-automation','enable-logging'])
-    chrome_options.add_argument('--lang=en-US') 
-    chrome_options.add_argument('--ignore-certificate-errors')  # ignore ssl certificate errors
-    chrome_options.add_argument('--disable-software-rasterizer')
-    chrome_options.add_argument('window-size=1440x900')
-    chrome_options.add_argument('--headless')     # don't display windows
-    chrome_options.add_argument('--disable-gpu')  # don't display windows
-    chrome_options.add_argument('--disable-extensions')  
-    chrome_options.add_argument("disable-cache")
-    if use_proxy:
-        chrome_options.add_argument(f'--proxy-server={proxy_server}:{proxy_port}')    # set http proxy
-    '''
-        #set socks proxy
-        proxy = Proxy()
-        proxy.proxyType = ProxyType.MANUAL
-        proxy.autodetect = False
-        proxy.httpProxy = proxy.sslProxy = proxy.socksProxy = "127.0.0.1:8119"
-        chrome_options.Proxy = proxy
-    '''
-
-
-    service = Service(executable_path='chromedriver.exe')
-    try:
-        driver = webdriver.Chrome(options=chrome_options, service=service)
-    except:
-        driver = webdriver.Chrome(options=chrome_options, executable_path=chrome_driver_path)
-    
-    driver.set_page_load_timeout(page_load_timeout)
-    driver_list.append(driver)
-
-    while True:
-        doc = None
-        is_cdn = False
-        try:
-            target = q_in.get(timeout=5)
-        except :
-            break
-        
-        try:
+    # playwright 替换 selenium
+    with sync_playwright() as p:
+        launch_args = {
+            'headless': True,
+            'ignore_default_args': [],
+        }
+        if use_proxy:
+            launch_args['proxy'] = {
+                'server': f'http://{proxy_server}:{proxy_port}'
+            }
+        browser = p.chromium.launch(**launch_args)
+        context = browser.new_context(
+            viewport={'width': 1440, 'height': 900},
+            ignore_https_errors=True,
+            locale='en-US'
+        )
+        while True:
+            doc = None
+            is_cdn = False
             try:
-                driver.get(target, )
+                target = q_in.get(timeout=5)
+            except:
+                break
+            try:
+                page = context.new_page()
+                page.set_default_navigation_timeout(page_load_timeout * 1000)
+                response = page.goto(target)
                 doc = docx.Document('Normal.docx')
-            except :
-                continue
-
-            url = urlparse(target)
-            hostAndPort = url.netloc
-            ip_addr = None
-            ptr_domain = None
-            target_port = None
-            try:
-                hostname, target_port = hostAndPort.split(":")
-                ip_addr = hostname
-                hostAndPort = hostAndPort.replace(':','_')
-            except Exception as e:
-                hostname = hostAndPort
-                if url.scheme == 'http':
-                    target_port = '80'
-                else:
-                    target_port = '443'
-            ts = str(datetime.datetime.now().timestamp())
-            img_name = f"output/{time_str}/png/{hostAndPort}.{ts}.png"
-            try:
-                driver.get_screenshot_as_file(img_name)
-            except Exception as e:
-                e_info = f"exception, {e.__traceback__.tb_frame.f_globals['__file__']}, line: {e.__traceback__.tb_lineno}\n{str(e)}\n"
-                print(e_info)
-                img_name = f"output/{time_str}/png/{ts}.png"
-                driver.get_screenshot_as_file(img_name)
-            title = driver.title
-            
-            
-            if isip(hostname):
-                pass
-            else:
+                # 等待页面加载完成
+                page.wait_for_load_state('load', timeout=page_load_timeout * 1000)
+                url = urlparse(target)
+                hostAndPort = url.netloc
+                ip_addr = None
+                ptr_domain = None
+                target_port = None
                 try:
-                    ips = socket.gethostbyname_ex(hostname)
-                    if len(ips[2]) >= 3 : 
-                        # print('maybe cdn')
-                        is_cdn = True
-                    ip_addr = ips[2][0]
-                except socket.error:
-                    pass
-
-            tf_idf_list = None
-            
-            if need_word_freq:
-                tf_idf_list = tf_idf.get_tf_idf_sort_list(driver.page_source)
-            
-            _be_transed = 'None'
-            try:
-                
-                doc.add_heading(title, 1) 
-                doc.add_paragraph(target)
-                try:
-                    _be_transed = google_translate(title, to_language='zh-CN')
-                    doc.add_paragraph('标题翻译: ' + _be_transed)
-                except:
-                    pass
-       
-                if is_cdn:
-                    doc.add_paragraph('IS CDN: More then 3 IP, maybe')
-                else:
-                    doc.add_paragraph('IS CDN: No')
-                
-                try:
-                    ptr_domain = socket.gethostbyaddr(ip_addr)
-                    doc.add_paragraph(f'IP反析域名: {ptr_domain}')
-                    doc.add_paragraph('')
-                except:
-                    pass
-                
-                if tf_idf_list:
-                    doc.add_paragraph('词频:')
-                    combine_word = ''
-                    
-                    for word, k in tf_idf_list:
-                        combine_word += word 
-                        combine_word += '|'
-                    
-                    _word_transed = None
-                    if need_tanslate:
-                        try:
-                            _word_transed = google_translate(combine_word, to_language='zh-CN')
-                        except Exception as e:
-                            print(e)
-                        
-                    if _word_transed:
-                        _words = _word_transed.split("|")
-                        for i in range(0, len(tf_idf_list)):
-                            word = tf_idf_list[i][0]
-                            word_fq = str(tf_idf_list[i][1])[:3]
-                            try:
-                                _current_translated_word = _words[i]
-                            except:
-                                _current_translated_word = word
-                            doc.add_paragraph(f'\t{word} ({_current_translated_word}): {word_fq}')
+                    hostname, target_port = hostAndPort.split(":")
+                    ip_addr = hostname
+                    hostAndPort = hostAndPort.replace(':','_')
+                except Exception as e:
+                    hostname = hostAndPort
+                    if url.scheme == 'http':
+                        target_port = '80'
                     else:
-                        for word, k in tf_idf_list:
-                            _word_transed = ''
-                            k = str(k)[:3]
-                            doc.add_paragraph(f'{word} ({_word_transed}): {k}')
-                        
-                #kscan_verify(Protocol, Port, Header, Body, Response, Title=b'', Hash=b'', Icon=b'', IPC=b'', Cert=b'')
+                        target_port = '443'
+                ts = str(datetime.datetime.now().timestamp())
+                img_name = f"output/{time_str}/png/{hostAndPort}.{ts}.png"
                 try:
-                    _req = 'None'
-                    Header = b''
-                    _content = b''
-                    Body = driver.page_source.encode('utf-8', errors='ignore')
-                    Response = Body
+                    page.screenshot(path=img_name, full_page=True)
+                except Exception as e:
+                    print(e)
+                    img_name = f"output/{time_str}/png/{ts}.png"
+                    page.screenshot(path=img_name, full_page=True)
+                title = page.title()
+                try:
+                    url2 = urlparse(page.url)
+                    hostAndPort2 = url2.netloc
                     try:
-                        _req = requests.head(target, verify=False, timeout=9)
+                        hostname2, target_port2 = hostAndPort2.split(":")
+                        hostAndPort2 = hostAndPort2.replace(':','_')
+                    except Exception as e:
+                        hostname2 = hostAndPort2
+                        if url2.scheme == 'http':
+                            target_port2 = '80'
+                        else:
+                            target_port2 = '443'
+                except Exception as e:
+                    pass
+                if isip(hostname):
+                    pass
+                else:
+                    try:
+                        ips = socket.gethostbyname_ex(hostname)
+                        if len(ips[2]) >= 3:
+                            is_cdn = True
+                        ip_addr = ips[2][0]
+                    except socket.error:
+                        pass
+                tf_idf_list = None
+                page_source = page.content()
+                if need_word_freq:
+                    tf_idf_list = tf_idf.get_tf_idf_sort_list(page_source)
+                copyright_pattern = r"(?:©|Copyright|版权所有)\s*(?:\((?:©|c)\)|\[(?:©|c)\])?\s*(\d{4}(?:-\d{4})?)\s*[,.\s]*([A-Za-z0-9\u4e00-\u9fa5\s&]+)(?:\s*All\sRights\sReserved)?\s*(?:[,.\s]*[A-Za-z0-9\u4e00-\u9fa5\s&]+)?"
+                
+                matches = re.findall(copyright_pattern, page_source, re.IGNORECASE)
+                copyright_info = ''
+                tmp_copyright_list = []
+                if matches:
+                    for year, owner in matches:
+                        tmp_copyright_list.append(f'{year} {owner.strip()}')
+                if tmp_copyright_list:
+                    tmp_copyright_list = list(set(tmp_copyright_list))
+                    copyright_info = ", ".join(tmp_copyright_list)
+                    copyright_info = copyright_info.replace('\n','')
+                    copyright_info = copyright_info.replace('\r','')
+                    copyright_info = 'Copyright:\t' + copyright_info
+                _be_transed = 'None'
+                try:
+                    doc.add_heading(title, 1)
+                    doc.add_paragraph(target)
+                    try:
+                        _be_transed = google_translate(title, to_language='zh-CN')
+                        doc.add_paragraph('标题翻译: ' + _be_transed)
+                    except:
+                        pass
+                    if is_cdn:
+                        doc.add_paragraph('是否解析到多个IP:\tMore then 3 IP, maybe')
+                    else:
+                        doc.add_paragraph('是否解析到多个IP:\tNo')
+                    try:
+                        ptr_domain = socket.gethostbyaddr(ip_addr)
+                        ptr_domain_str = "\n\t" + ptr_domain[0] + "\r\t" + "\n\t".join(ptr_domain[1]) + "\n\t" + "\n\t".join(ptr_domain[2])
+                        ptr_domain_str = ptr_domain_str.replace('\r\n\t\r\n', '\r\n')
+                        ptr_domain_str = ptr_domain_str.replace('\n\t\n', '\n')
+                        doc.add_paragraph(f'IP反析域名: {ptr_domain_str}')
+                        doc.add_paragraph('')
+                    except:
+                        pass
+                    if tf_idf_list:
+                        doc.add_paragraph('词频:')
+                        combine_word = ''
+                        for word, k in tf_idf_list:
+                            combine_word += word
+                            combine_word += '|'
+                        _word_transed = None
+                        if need_tanslate:
+                            try:
+                                _word_transed = google_translate(combine_word, to_language='zh-CN')
+                            except Exception as e:
+                                print(e)
+                        if _word_transed:
+                            _words = _word_transed.split("|")
+                            for i in range(0, len(tf_idf_list)):
+                                word = tf_idf_list[i][0]
+                                word_fq = str(tf_idf_list[i][1])[:3]
+                                try:
+                                    _current_translated_word = _words[i]
+                                except:
+                                    _current_translated_word = word
+                                doc.add_paragraph(f'\t{word} ({_current_translated_word}): {word_fq}')
+                        else:
+                            for word, k in tf_idf_list:
+                                _word_transed = ''
+                                k = str(k)[:3]
+                                doc.add_paragraph(f'\t{word}: {k}')
+                    # kscan_verify(Protocol, Port, Header, Body, Response, Title=b'', Hash=b'', Icon=b'', IPC=b'', Cert=b'')
+                    try:
+                        _req = 'None'
+                        headers = {
+                            'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.63 Safari/537.36',
+                            'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+                        }
+                        Header = b''
+                        Body = page.content().encode('utf-8', errors='ignore')
+                        Response = Body
+                        cert_info = get_cert(target)
+                        origin_html = b''
+                        try:
+                            _req = requests.get(target, verify=False, timeout=page_load_timeout, proxies=proxies, headers=headers)
+                            origin_html = _req.content
+                        except:
+                            traceback.print_exc()
+                        if _req != 'None':
+                            Header = "\r\n".join([i+': '+_req.headers[i] for i in _req.headers]).encode('utf-8', errors='ignore')
+                            Response = Header + b'\r\n\r\n' + Response
+                            if _req.headers.get('server'):
+                                doc.add_paragraph("")
+                                doc.add_paragraph("Server:\t" + _req.headers.get('server'))
+                            elif _req.headers.get('Server'):
+                                doc.add_paragraph("")
+                                doc.add_paragraph("Server:\t" + _req.headers.get('Server'))
+                        kscan_info_for_origin_html = ''
+                        if origin_html:
+                            kscan_info_for_origin_html = kscan_verify(url.scheme.encode('utf-8', errors='ignore'), target_port.encode('utf-8', errors='ignore'), Header, origin_html, Header+b'\r\n\r\n'+origin_html, title.encode('utf-8', errors='ignore'), Hash=b'', Icon=b'', IPC=b'', Cert=b'')
+                        kscan_info = kscan_verify(url.scheme.encode('utf-8', errors='ignore'), target_port.encode('utf-8', errors='ignore'), Header, Body, Response, title.encode('utf-8', errors='ignore'), Hash=b'', Icon=b'', IPC=b'', Cert=b'')
+                        if kscan_info:
+                            if kscan_info_for_origin_html:
+                                doc.add_paragraph("\n产品:\t" + kscan_info_for_origin_html)
+                            doc.add_paragraph("产品:\t" + kscan_info)
+                        if cert_info:
+                            doc.add_paragraph(cert_info)
+                        if copyright_info:
+                            doc.add_paragraph(copyright_info)
                     except:
                         traceback.print_exc()
-                    if _req != 'None':
-                        _content = _req.content
-                        Header = "\r\n".join( [ i+': '+_req.headers[i] for i in _req.headers ] ).encode('utf-8', errors='ignore')
-                        Response = Header + b'\r\n\r\n' + Response
-                        if _req.headers.get('server'):
-                            doc.add_paragraph("")
-                            doc.add_paragraph("Server:\t" + _req.headers.get('server'))
-                        elif _req.headers.get('Server'):
-                            doc.add_paragraph("")
-                            doc.add_paragraph("Server:\t" + _req.headers.get('Server'))
-                        
-                    kscan_info = kscan_verify(url.scheme.encode('utf-8', errors='ignore'), target_port.encode('utf-8', errors='ignore'), Header, Body, Response, title.encode('utf-8', errors='ignore'), Hash=b'', Icon=b'', IPC=b'', Cert=b'')
-                    if kscan_info:
-                        doc.add_paragraph("产品:\t" + kscan_info)
-                except:
-                    traceback.print_exc()
-                    
-                doc.add_paragraph("")
-
+                    doc.add_paragraph("")
+                except Exception as e:
+                    print(e)
+                finally:
+                    q_csv.put([target, title, _be_transed])
+                try:
+                    doc.add_picture(img_name,
+                                    width=docx.shared.Cm(15.5),
+                                    height=docx.shared.Cm(10))
+                except Exception as e:
+                    pass
+                doc.save(tmp_file_path + '/' + str(datetime.datetime.now().timestamp()) + '.docx')
             except Exception as e:
-                e_info = f"exception, {e.__traceback__.tb_frame.f_globals['__file__']}, line: {e.__traceback__.tb_lineno}\n{str(e)}\n"
-                print(e_info)
-            finally:
-                q_csv.put([target, title, _be_transed])
-            
-            try:
-                doc.add_picture(img_name,
-                                width=docx.shared.Cm(15.5),
-                                height=docx.shared.Cm(10))
-            except Exception as e:
-                e_info = f"exception, {e.__traceback__.tb_frame.f_globals['__file__']}, line: {e.__traceback__.tb_lineno}\n{str(e)}\n"
-                # print(e_info)
-            
-            doc.save(tmp_file_path + '/' + str(datetime.datetime.now().timestamp()) + '.docx')
-            
-        except Exception as e:
-            e_info = f"exception, {e.__traceback__.tb_frame.f_globals['__file__']}, line: {e.__traceback__.tb_lineno}\n{str(e)}\n"
-            print(e_info)
-        q_out.put({'success.txt': target})
-    
-    driver.quit()
+                print(e)
+            q_out.put({'success.txt': target})
+        browser.close()
     
 
 def consumer_log(q_out):   
@@ -398,6 +444,7 @@ def write_csv():
         csv_writer = csv.writer(fp_csv, dialect="excel", )
         csv_writer.writerow(line)
         fp_csv.close()
+
 
 
 
